@@ -30,4 +30,4 @@ Hier is een voorbeeld van hoe de tool eruitziet:
 
 ## Ondersteuning
 
-Als u problemen ondervindt of vragen heeft, neem dan contact op met de ontwikkelaar.
+Als u problemen ondervindt of vragen heeft, neem dan contact op met de Arjan den Hartog [arjandenhartog.com](https://arjandenhartog.com/).

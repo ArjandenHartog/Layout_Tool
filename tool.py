@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QScrollArea, QFrame, QRadioButton, QButtonGroup,
                            QGridLayout, QShortcut, QStatusBar)
 from PyQt5.QtCore import Qt, QPoint, QRect
-from PyQt5.QtGui import QImage, QPainter, QPen, QColor, QKeySequence
+from PyQt5.QtGui import QImage, QPainter, QPen, QColor, QKeySequence, QPainterPath, QIcon, QDoubleValidator, QIntValidator, QPolygon
 import sys
 import math
 import subprocess
@@ -53,6 +53,17 @@ class ShapeEditor(QFrame):
         if self.drawing:
             self.current_rect = QRect(self.start_point, event.pos()).normalized()
             self.update_dimensions_label(self.current_rect)
+            # Voeg vloeiende beweging toe tijdens tekenen
+            self.update()
+        else:
+            # Toon preview alleen als we niet tekenen
+            if not self.shapes:  # Alleen preview als er geen vorm is
+                self.preview_mode = True
+                self.update()
+
+    def leaveEvent(self, event):
+        # Reset preview wanneer muis het gebied verlaat
+        self.preview_mode = False
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -80,22 +91,45 @@ class ShapeEditor(QFrame):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)  # Voeg anti-aliasing toe
+        painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), Qt.white)
         
         # Grid tekenen met verbeterde stijl
         self.draw_enhanced_grid(painter)
         
-        # Preview van vorm onder muis als er niet getekend wordt
-        if not self.drawing and not self.shapes:
-            preview_size = 50
+        # Preview van vorm onder muis als we niet tekenen
+        if self.preview_mode and not self.shapes and not self.drawing:
+            preview_size = 100  # Grotere preview
             preview_rect = QRect(
                 self.hover_point.x() - preview_size//2,
                 self.hover_point.y() - preview_size//2,
                 preview_size, preview_size
             )
-            painter.setPen(QPen(self.shape_color, 1, Qt.DashLine))
+            # Teken semi-transparante preview met stippellijn
+            painter.setOpacity(0.4)
+            pen = QPen(self.shape_color, self.line_thickness, Qt.DashLine)
+            pen.setDashPattern([5, 5])  # Maak een mooiere stippellijn
+            painter.setPen(pen)
             self.draw_shape(painter, self.shape_type, preview_rect)
+            
+            # Teken hulppunten voor de driehoek
+            if self.shape_type == "Driehoek":
+                painter.setOpacity(0.6)
+                point_size = 6
+                points = [
+                    QPoint(int(preview_rect.left() + preview_rect.width()/2), preview_rect.top()),
+                    QPoint(preview_rect.left(), preview_rect.bottom()),
+                    QPoint(preview_rect.right(), preview_rect.bottom())
+                ]
+                for point in points:
+                    painter.fillRect(
+                        point.x() - point_size//2,
+                        point.y() - point_size//2,
+                        point_size, point_size,
+                        self.shape_color
+                    )
+            
+            painter.setOpacity(1.0)
 
         # Teken opgeslagen vormen
         for shape_type, rect, color in self.shapes:
@@ -103,7 +137,7 @@ class ShapeEditor(QFrame):
             shadow_offset = 2
             shadow_rect = QRect(rect)
             shadow_rect.translate(shadow_offset, shadow_offset)
-            painter.setPen(QPen(QColor(100, 100, 100, 50), 2))
+            painter.setPen(QPen(QColor(100, 100, 100, 50), self.line_thickness))
             self.draw_shape(painter, shape_type, shadow_rect)
             
             # Teken hoofdvorm
@@ -127,15 +161,15 @@ class ShapeEditor(QFrame):
             # Teken perfecte cirkel
             painter.drawEllipse(rect)
         elif shape_type == "Driehoek":
-            # Teken driehoek met gelijkmatige punten
+            # Verbeterde driehoek met vloeiende lijnen en correcte type conversie
             points = [
-                rect.topLeft() + QPoint(rect.width()/2, 0),  # top middle
-                rect.bottomLeft(),                           # bottom left
-                rect.bottomRight()                           # bottom right
+                QPoint(int(rect.left() + rect.width()/2), rect.top()),  # Top midden
+                QPoint(rect.left(), rect.bottom()),                     # Links onder
+                QPoint(rect.right(), rect.bottom())                     # Rechts onder
             ]
             # Teken driehoek met vloeiende lijnen
-            for i in range(3):
-                painter.drawLine(points[i], points[(i+1)%3])
+            polygon = QPolygon(points)
+            painter.drawPolygon(polygon)
 
     def draw_enhanced_grid(self, painter):
         cm_spacing = int(self.pixels_per_cm)
@@ -247,10 +281,14 @@ class LabelDesigner(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
         # Mode selectie
         mode_group = QGroupBox("Mode Selectie")
         mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(20)
+        mode_layout.setContentsMargins(10, 15, 10, 15)
         self.mode_group = QButtonGroup()
         
         self.label_mode = QRadioButton("Label Mode")
@@ -274,6 +312,8 @@ class LabelDesigner(QMainWindow):
         # Label afmetingen
         dimensions_group = QGroupBox("Afmetingen")
         dimensions_layout = QGridLayout()
+        dimensions_layout.setSpacing(10)
+        dimensions_layout.setContentsMargins(10, 15, 10, 15)
         
         self.label_width = QLineEdit("5")
         self.label_height = QLineEdit("3")
@@ -311,6 +351,8 @@ class LabelDesigner(QMainWindow):
         # Vorm instellingen
         shape_settings = QGroupBox("Vorm Instellingen")
         shape_settings_layout = QGridLayout()
+        shape_settings_layout.setSpacing(10)
+        shape_settings_layout.setContentsMargins(10, 15, 10, 15)
         
         # Vorm afmetingen (hergebruik van label afmetingen)
         self.shape_width = QLineEdit("5")
@@ -342,6 +384,7 @@ class LabelDesigner(QMainWindow):
         # Shape editor canvas met scroll area
         scroll_area = QScrollArea()
         self.shape_editor = ShapeEditor()
+        self.shape_editor.setMinimumSize(800, 600)
         scroll_area.setWidget(self.shape_editor)
         scroll_area.setWidgetResizable(True)
         shape_editor_layout.addWidget(scroll_area)
@@ -374,26 +417,30 @@ class LabelDesigner(QMainWindow):
         # Styling voor de UI
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f0f0f0;
+                background-color: #f5f5f5;
             }
             QGroupBox {
                 background-color: white;
-                border-radius: 5px;
-                margin-top: 10px;
-                font-weight: bold;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding: 15px;
+                border: 1px solid #e0e0e0;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
-                padding: 0 5px 0 5px;
+                padding: 0 5px;
+                color: #2196F3;
+                font-weight: bold;
             }
             QPushButton {
                 background-color: #2196F3;
                 color: white;
                 border: none;
-                padding: 5px 15px;
-                border-radius: 3px;
-                min-height: 25px;
+                padding: 8px 15px;
+                border-radius: 4px;
+                min-height: 30px;
+                font-weight: bold;
             }
             QPushButton:hover {
                 background-color: #1976D2;
@@ -401,31 +448,91 @@ class LabelDesigner(QMainWindow):
             QPushButton:pressed {
                 background-color: #0D47A1;
             }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+            }
             QLineEdit {
-                padding: 5px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
+                padding: 8px;
+                border: 2px solid #e0e0e0;
+                border-radius: 4px;
+                background-color: #ffffff;
+            }
+            QLineEdit:focus {
+                border-color: #2196F3;
             }
             QComboBox {
-                padding: 5px;
-                border: 1px solid #ccc;
-                border-radius: 3px;
+                padding: 8px;
+                border: 2px solid #e0e0e0;
+                border-radius: 4px;
+                background-color: #ffffff;
+            }
+            QComboBox:hover {
+                border-color: #2196F3;
             }
             QLabel {
-                color: #333;
+                color: #424242;
+                font-size: 12px;
             }
             QRadioButton {
-                spacing: 5px;
+                spacing: 8px;
+                color: #424242;
             }
             QRadioButton::indicator {
-                width: 15px;
-                height: 15px;
+                width: 18px;
+                height: 18px;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #2196F3;
+                border: 2px solid #2196F3;
+                border-radius: 9px;
+            }
+            QScrollArea {
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+            }
+            QStatusBar {
+                background-color: #f5f5f5;
+                color: #424242;
             }
         """)
 
         # Extra functionaliteiten toevoegen
         self.add_keyboard_shortcuts()
         self.setup_status_bar()
+
+        # Voeg tooltips toe aan alle belangrijke elementen
+        self.label_width.setToolTip("De breedte van het label in centimeters")
+        self.label_height.setToolTip("De hoogte van het label in centimeters")
+        self.margin.setToolTip("De ruimte tussen labels in centimeters")
+        self.outer_margin.setToolTip("De marge rondom alle labels in centimeters")
+        self.label_text.setToolTip("De tekst die op elk label wordt afgedrukt")
+        self.shape_selector.setToolTip("Kies het type vorm dat u wilt tekenen")
+        self.shape_color_button.setToolTip("Klik om de kleur van de vorm aan te passen")
+        self.line_thickness.setToolTip("De dikte van de lijnen in pixels")
+        self.clear_button.setToolTip("Wis de huidige vorm (Ctrl+D)")
+        self.generate_button.setToolTip("Genereer het A4 vel met vormen of labels (Ctrl+G)")
+
+        # Voeg placeholders toe aan tekstvelden
+        self.label_text.setPlaceholderText("Voer label tekst in...")
+        self.line_thickness.setPlaceholderText("2")
+
+        # Maak de knoppen meer beschrijvend
+        self.generate_button.setIcon(QIcon.fromTheme("document-save"))
+        self.clear_button.setIcon(QIcon.fromTheme("edit-clear"))
+        
+        # Voeg wat extra validatie toe aan de invoervelden
+        self.label_width.setValidator(QDoubleValidator(0.1, 21.0, 1))
+        self.label_height.setValidator(QDoubleValidator(0.1, 29.7, 1))
+        self.margin.setValidator(QDoubleValidator(0.0, 5.0, 2))
+        self.outer_margin.setValidator(QDoubleValidator(0.0, 5.0, 2))
+        self.line_thickness.setValidator(QIntValidator(1, 10))
+
+        # Update status bar met meer informatie
+        def update_status(text):
+            self.statusBar.showMessage(f"Huidige modus: {text}")
+        
+        self.label_mode.toggled.connect(lambda: update_status("Label Mode"))
+        self.shape_mode.toggled.connect(lambda: update_status("Vorm Mode"))
 
     def add_keyboard_shortcuts(self):
         # Sneltoetsen toevoegen
@@ -665,20 +772,31 @@ class LabelDesigner(QMainWindow):
                         shape_color = QColor(color).getRgb()[:3]  # Convert Qt.GlobalColor to RGB
                     
                     if shape_type == "Rechthoek":
-                        draw.rectangle([x, y, x + SHAPE_WIDTH, y + SHAPE_HEIGHT], 
-                                     outline=shape_color, width=2)
+                        # Gebruik de lijndikte van de editor
+                        for i in range(self.shape_editor.line_thickness):
+                            offset = i - self.shape_editor.line_thickness // 2
+                            draw.rectangle([
+                                x + offset, y + offset, 
+                                x + SHAPE_WIDTH - offset, y + SHAPE_HEIGHT - offset
+                            ], outline=shape_color)
                     elif shape_type == "Cirkel":
-                        draw.ellipse([x, y, x + SHAPE_WIDTH, y + SHAPE_HEIGHT], 
-                                   outline=shape_color, width=2)
+                        # Teken cirkel met juiste lijndikte
+                        for i in range(self.shape_editor.line_thickness):
+                            offset = i - self.shape_editor.line_thickness // 2
+                            draw.ellipse([
+                                x + offset, y + offset, 
+                                x + SHAPE_WIDTH - offset, y + SHAPE_HEIGHT - offset
+                            ], outline=shape_color)
                     elif shape_type == "Driehoek":
-                        # Verbeterde driehoek met exacte afmetingen
-                        points = [
-                            (x + SHAPE_WIDTH/2, y),  # top middle
-                            (x, y + SHAPE_HEIGHT),    # bottom left
-                            (x + SHAPE_WIDTH, y + SHAPE_HEIGHT)  # bottom right
-                        ]
-                        # Teken driehoek met vulling en rand
-                        draw.polygon(points, outline=shape_color)
+                        # Verbeterde driehoek met exacte afmetingen en lijndikte
+                        for i in range(self.shape_editor.line_thickness):
+                            offset = i - self.shape_editor.line_thickness // 2
+                            points = [
+                                (int(x + SHAPE_WIDTH/2), y + offset),           # Top midden
+                                (x + offset, y + SHAPE_HEIGHT - offset),        # Links onder
+                                (x + SHAPE_WIDTH - offset, y + SHAPE_HEIGHT - offset)  # Rechts onder
+                            ]
+                            draw.polygon(points, outline=shape_color)
 
             # "Machine Coating" tekst schuin bovenin
             title_text = "Machine Coating"
