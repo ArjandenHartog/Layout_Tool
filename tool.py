@@ -21,7 +21,7 @@ class ShapeEditor(QFrame):
         self.image.fill(Qt.white)
         self.drawing = False
         self.shape_type = "Rechthoek"
-        self.shape_color = QColor(Qt.black)  # Initialize with QColor object
+        self.shape_color = QColor("#723744")  # Update default kleur
         self.start_point = QPoint()
         self.current_rect = None
         self.shapes = []  # List of (shape_type, rect, color)
@@ -277,7 +277,17 @@ class LabelDesigner(QMainWindow):
         self.setWindowTitle("Label Designer")
         self.setGeometry(100, 100, 1000, 800)
         
-        # Hoofdwidget en layout
+        # Initialiseer layout inputs eerst
+        self.columns_input = QLineEdit("3")
+        self.rows_input = QLineEdit("4")
+        self.shape_margin = QLineEdit("0.2")
+        
+        # Validators toevoegen
+        self.columns_input.setValidator(QIntValidator(1, 20))
+        self.rows_input.setValidator(QIntValidator(1, 20))
+        self.shape_margin.setValidator(QDoubleValidator(0.0, 5.0, 2))
+        
+        # Rest van de initialisatie
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
@@ -354,6 +364,30 @@ class LabelDesigner(QMainWindow):
         shape_settings_layout.setSpacing(10)
         shape_settings_layout.setContentsMargins(10, 15, 10, 15)
         
+        # Layout instellingen toggle
+        self.manual_layout_checkbox = QCheckBox("Handmatige layout instellingen")
+        self.manual_layout_checkbox.setToolTip("Vink aan om het aantal rijen en kolommen handmatig in te stellen")
+        shape_editor_layout.insertWidget(0, self.manual_layout_checkbox)
+        
+        # Margin instellingen apart van handmatige layout
+        margin_group = QGroupBox("Marge Instellingen")
+        margin_layout = QGridLayout()
+        margin_layout.addWidget(QLabel("Marge tussen vormen (cm):"), 0, 0)
+        margin_layout.addWidget(self.shape_margin, 0, 1)
+        margin_group.setLayout(margin_layout)
+        shape_editor_layout.insertWidget(1, margin_group)  # Voeg toe voor layout_group
+        
+        # Layout instellingen groep (alleen kolommen en rijen)
+        self.layout_group = QGroupBox("Layout Instellingen")
+        layout_settings = QGridLayout()
+        layout_settings.addWidget(QLabel("Aantal kolommen:"), 0, 0)
+        layout_settings.addWidget(self.columns_input, 0, 1)
+        layout_settings.addWidget(QLabel("Aantal rijen:"), 1, 0)
+        layout_settings.addWidget(self.rows_input, 1, 1)
+        
+        self.layout_group.setLayout(layout_settings)
+        shape_editor_layout.insertWidget(2, self.layout_group)  # Na margin_group
+        
         # Vorm afmetingen (hergebruik van label afmetingen)
         self.shape_width = QLineEdit("5")
         self.shape_height = QLineEdit("3")
@@ -409,6 +443,23 @@ class LabelDesigner(QMainWindow):
 
         # Connect the line thickness QLineEdit to the set_line_thickness method
         self.line_thickness.textChanged.connect(self.update_line_thickness)
+
+        # Connecties voor nieuwe validaties
+        self.shape_margin.textChanged.connect(self.update_margins)
+        self.columns_input.textChanged.connect(self.validate_and_update_inputs)
+        self.rows_input.textChanged.connect(self.validate_and_update_inputs)
+        
+        # Maak de tekstvelden wat breder voor betere leesbaarheid
+        self.columns_input.setMinimumWidth(60)
+        self.rows_input.setMinimumWidth(60)
+        self.shape_margin.setMinimumWidth(60)
+        
+        # Voorkom negatieve waardes in de marges
+        self.shape_margin.setValidator(QDoubleValidator(0.0, 5.0, 2))
+        self.shape_margin.setText("0.2")  # Standaard waarde
+        
+        # Update initiële waardes
+        self.validate_and_update_inputs()
 
         # Start in label mode
         self.label_mode.setChecked(True)
@@ -496,6 +547,35 @@ class LabelDesigner(QMainWindow):
             }
         """)
 
+        # Styling voor de checkbox
+        self.manual_layout_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #424242;
+                spacing: 8px;
+                padding: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #e0e0e0;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #2196F3;
+                border-color: #2196F3;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #2196F3;
+            }
+        """)
+
+        # Verbeterde tooltips voor layout instellingen
+        self.manual_layout_checkbox.setToolTip(
+            "Vink aan om het aantal rijen en kolommen handmatig in te stellen.\n"
+            "Indien uitgevinkt wordt de optimale indeling automatisch berekend."
+        )
+
         # Extra functionaliteiten toevoegen
         self.add_keyboard_shortcuts()
         self.setup_status_bar()
@@ -534,6 +614,12 @@ class LabelDesigner(QMainWindow):
         self.label_mode.toggled.connect(lambda: update_status("Label Mode"))
         self.shape_mode.toggled.connect(lambda: update_status("Vorm Mode"))
 
+        # Voeg preview update toe wanneer layout settings veranderen
+        self.manual_layout_checkbox.toggled.connect(self.update_layout_preview)
+        self.columns_input.textChanged.connect(self.update_layout_preview)
+        self.rows_input.textChanged.connect(self.update_layout_preview)
+        self.shape_margin.textChanged.connect(self.update_layout_preview)
+
     def add_keyboard_shortcuts(self):
         # Sneltoetsen toevoegen
         self.generate_shortcut = QShortcut(QKeySequence("Ctrl+G"), self)
@@ -554,13 +640,84 @@ class LabelDesigner(QMainWindow):
         self.shape_editor_widget.setVisible(not is_label_mode)
         self.generate_button.setText("Genereer Labels" if is_label_mode else "Genereer Vorm Labels")
 
+    def validate_and_update_inputs(self):
+        if not self.manual_layout_checkbox.isChecked():
+            return  # Skip validatie in automatische modus
+            
+        try:
+            DPI = 300
+            A4_WIDTH_CM = 21
+            A4_HEIGHT_CM = 29.7
+            MARGIN_CM = float(self.shape_margin.text() or 0.2)
+
+            current_shape = self.shape_editor.get_current_shape()
+            if not current_shape:
+                return
+
+            _, rect, _ = current_shape
+            shape_width_cm = rect.width() / self.shape_editor.pixels_per_cm
+            shape_height_cm = rect.height() / self.shape_editor.pixels_per_cm
+
+            # Bereken maximum mogelijke kolommen en rijen
+            max_cols = int((A4_WIDTH_CM - 2) / (shape_width_cm + MARGIN_CM))
+            max_rows = int((A4_HEIGHT_CM - 2) / (shape_height_cm + MARGIN_CM))
+
+            # Update de validators
+            self.columns_input.setValidator(QIntValidator(1, max_cols))
+            self.rows_input.setValidator(QIntValidator(1, max_rows))
+
+            # Update de tooltips met maximale waarden
+            self.columns_input.setToolTip(f"Aantal kolommen (max: {max_cols})")
+            self.rows_input.setToolTip(f"Aantal rijen (max: {max_rows})")
+
+            # Corrigeer huidige waarden indien nodig
+            try:
+                cols = min(int(self.columns_input.text()), max_cols)
+                rows = min(int(self.rows_input.text()), max_rows)
+                self.columns_input.setText(str(cols))
+                self.rows_input.setText(str(rows))
+            except ValueError:
+                self.columns_input.setText(str(min(3, max_cols)))
+                self.rows_input.setText(str(min(4, max_rows)))
+
+        except ValueError:
+            # Fallback naar veilige waarden
+            self.columns_input.setText("3")
+            self.rows_input.setText("4")
+
     def update_shape_preview(self):
         try:
             width = float(self.shape_width.text()) * 37.8  # ongeveer pixels per cm
             height = float(self.shape_height.text()) * 37.8
             self.shape_editor.set_dimensions(width, height)
+            
+            # Update layout preview met de nieuwe vorm dimensies
+            if not self.manual_layout_checkbox.isChecked():
+                # Bereken optimale layout
+                A4_WIDTH_CM = 21
+                A4_HEIGHT_CM = 29.7
+                MARGIN_CM = float(self.shape_margin.text() or 0.2)
+                
+                # Bereken hoeveel vormen er passen
+                usable_width_cm = A4_WIDTH_CM - 2  # 1 cm marge aan elke kant
+                usable_height_cm = A4_HEIGHT_CM - 2
+                shape_width_cm = float(self.shape_width.text())
+                shape_height_cm = float(self.shape_height.text())
+                
+                cols = max(1, int(usable_width_cm / (shape_width_cm + MARGIN_CM)))
+                rows = max(1, int(usable_height_cm / (shape_height_cm + MARGIN_CM)))
+                
+                # Update de UI
+                self.columns_input.setText(str(cols))
+                self.rows_input.setText(str(rows))
+                self.update_layout_preview()
+                
         except ValueError:
             pass
+
+    def update_margins(self):
+        """Update de layout wanneer de marges veranderen"""
+        self.validate_and_update_inputs()
 
     def choose_shape_color(self):
         color = QColorDialog.getColor(initial=self.shape_editor.shape_color)
@@ -601,10 +758,11 @@ class LabelDesigner(QMainWindow):
         # Font instellen
         try:
             main_font = ImageFont.truetype("arial.ttf", 40)
-            title_font = ImageFont.truetype("arial.ttf", 60)  # Grotere font voor "Machine Coating"
-            count_font = ImageFont.truetype("arial.ttf", 80)  # Nog grotere font voor aantal labels
+            title_font = ImageFont.truetype("arial.ttf", 180)  # Nog groter naar 180
+            count_font = ImageFont.truetype("arial.ttf", 200)  # Nog groter naar 200
+            watermark_font = ImageFont.truetype("arial.ttf", 50)  # Groter watermark
         except:
-            main_font = title_font = count_font = ImageFont.load_default()
+            main_font = title_font = count_font = watermark_font = ImageFont.load_default()
 
         # Define watermark_font at the beginning of the generate_label_sheet method
         watermark_font = ImageFont.truetype("arial.ttf", 20)
@@ -648,13 +806,18 @@ class LabelDesigner(QMainWindow):
         title_width = title_bbox[2] - title_bbox[0]
         title_height = title_bbox[3] - title_bbox[1]
         
-        # Maak een nieuwe afbeelding voor de gedraaide tekst
-        txt = Image.new('RGBA', (title_width + 50, title_height + 50), (255, 255, 255, 0))
+        # Maak een nieuwe afbeelding voor de gedraaide tekst met extra ruimte
+        txt = Image.new('RGBA', (title_width + 300, title_height + 300), (255, 255, 255, 0))
         d = ImageDraw.Draw(txt)
-        d.text((25, 25), title_text, font=title_font, fill="black")
-        # Roteer de tekst en plak deze op de juiste positie
+        # Voeg meerdere schaduwlagen toe voor meer diepte
+        shadow_offsets = [(6,6), (4,4), (2,2)]
+        for offset in shadow_offsets:
+            d.text((150 + offset[0], 150 + offset[1]), title_text, font=title_font, fill=(0, 0, 0, 80))
+        # Hoofdtekst met donkerder zwart
+        d.text((150, 150), title_text, font=title_font, fill=(0, 0, 0))
+        # Roteer de tekst en plak deze hoger op de pagina
         txt = txt.rotate(15, expand=1)
-        image.paste(txt, (A4_WIDTH//2 - txt.width//2, 100), txt)
+        image.paste(txt, (A4_WIDTH//2 - txt.width//2, 30), txt)  # Iets hoger geplaatst
 
         # Labels tekenen
         for row in range(rows):
@@ -677,14 +840,21 @@ class LabelDesigner(QMainWindow):
                     text_y = y0 + (LABEL_HEIGHT - text_height) // 2
                     draw.text((text_x, text_y), text, font=main_font, fill="black")
 
-        # Aantal labels (groot, rechtsonder)
+        # Verbeterd aantal labels met schaduw
         total_labels = rows * cols
         label_count_text = f"{total_labels}"
-        # Bereken tekstgrootte voor aantal labels
         count_bbox = draw.textbbox((0, 0), label_count_text, font=count_font)
         count_width = count_bbox[2] - count_bbox[0]
-        draw.text((A4_WIDTH - count_width - 40, A4_HEIGHT - 120), 
-                 label_count_text, font=count_font, fill="black")
+        
+        # Teken meerdere schaduwlagen voor het aantal
+        shadow_positions = [(5,5), (3,3), (2,2)]
+        for offset in shadow_positions:
+            draw.text((A4_WIDTH - count_width - 40 + offset[0], A4_HEIGHT - 160 + offset[1]), 
+                     label_count_text, font=count_font, fill=(0, 0, 0, 60))
+        
+        # Hoofdtekst van het aantal
+        draw.text((A4_WIDTH - count_width - 40, A4_HEIGHT - 160), 
+                 label_count_text, font=count_font, fill=(0, 0, 0))
 
         # Afmetingen watermerk
         dimensions_text = f"Label afmetingen: {LABEL_WIDTH_CM:.1f} x {LABEL_HEIGHT_CM:.1f} cm"
@@ -694,12 +864,22 @@ class LabelDesigner(QMainWindow):
         # Afbeelding opslaan
         image.save("a4_labels.png")
 
+    def validate_layout(self, total_width, total_height, A4_WIDTH, A4_HEIGHT):
+        """Controleert of de layout past op het A4 vel"""
+        if total_width > A4_WIDTH:
+            self.statusBar.showMessage("Waarschuwing: De vormen zijn te breed voor het A4 vel!", 5000)
+            return False
+        if total_height > A4_HEIGHT:
+            self.statusBar.showMessage("Waarschuwing: De vormen zijn te hoog voor het A4 vel!", 5000)
+            return False
+        return True
+
     def export_shape(self):
         # Instellingen
         DPI = 300
         A4_WIDTH_CM = 21
         A4_HEIGHT_CM = 29.7
-        MARGIN_CM = float(self.margin.text()) if self.margin.text() else 0.2
+        MARGIN_CM = float(self.shape_margin.text()) if self.shape_margin.text() else 0.2
         OUTER_MARGIN_CM = float(self.outer_margin.text()) if self.outer_margin.text() else 1.0
 
         # Vorm afmetingen (van getekende vorm)
@@ -715,17 +895,38 @@ class LabelDesigner(QMainWindow):
         try:
             # Font instellen met fallbacks
             try:
-                title_font = ImageFont.truetype("arial.ttf", 60)
-                count_font = ImageFont.truetype("arial.ttf", 80)
-                watermark_font = ImageFont.truetype("arial.ttf", 30)
+                title_font = ImageFont.truetype("arial.ttf", 180)  # Match met generate_label_sheet
+                count_font = ImageFont.truetype("arial.ttf", 200)  # Match met generate_label_sheet
+                watermark_font = ImageFont.truetype("arial.ttf", 50)  # Match met generate_label_sheet
             except:
                 try:
-                    # Try DejaVu Sans as alternative
-                    title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 60)
-                    count_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 80)
-                    watermark_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+                    title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 180)
+                    count_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 200)
+                    watermark_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 50)
                 except:
                     title_font = count_font = watermark_font = ImageFont.load_default()
+
+            # Gebruik handmatige of automatische layout
+            if self.manual_layout_checkbox.isChecked():
+                try:
+                    cols = int(self.columns_input.text())
+                    rows = int(self.rows_input.text())
+                except ValueError:
+                    self.statusBar.showMessage("Ongeldige rij- of kolomwaarden, gebruik automatische berekening", 3000)
+                    cols = max(1, (usable_width + MARGIN) // (SHAPE_WIDTH + MARGIN))
+                    rows = max(1, (usable_height + MARGIN) // (SHAPE_HEIGHT + MARGIN))
+            else:
+                # Bereken optimaal aantal kolommen en rijen
+                usable_width = A4_WIDTH - (2 * OUTER_MARGIN)
+                usable_height = A4_HEIGHT - (2 * OUTER_MARGIN)
+                
+                # Bereken hoeveel vormen er op een rij/kolom passen
+                cols = max(1, (usable_width + MARGIN) // (SHAPE_WIDTH + MARGIN))
+                rows = max(1, (usable_height + MARGIN) // (SHAPE_HEIGHT + MARGIN))
+
+                # Update de UI met de berekende waarden
+                self.columns_input.setText(str(cols))
+                self.rows_input.setText(str(rows))
 
             # Omrekenen naar pixels
             A4_WIDTH = int(A4_WIDTH_CM * DPI / 2.54)
@@ -735,20 +936,19 @@ class LabelDesigner(QMainWindow):
             MARGIN = int(MARGIN_CM * DPI / 2.54)
             OUTER_MARGIN = int(OUTER_MARGIN_CM * DPI / 2.54)
 
-            # Bereken layout
-            usable_width = A4_WIDTH - (2 * OUTER_MARGIN)
-            usable_height = A4_HEIGHT - (2 * OUTER_MARGIN)
-            
-            cols = (usable_width + MARGIN) // (SHAPE_WIDTH + MARGIN)
-            rows = (usable_height + MARGIN) // (SHAPE_HEIGHT + MARGIN)
-
+            # Bereken layout met vaste vorm dimensies
             total_width = cols * SHAPE_WIDTH + (cols - 1) * MARGIN
             total_height = rows * SHAPE_HEIGHT + (rows - 1) * MARGIN
             
             h_start = (A4_WIDTH - total_width) // 2
             v_start = (A4_HEIGHT - total_height) // 2
 
-            # Maak A4 afbeelding
+            # Controleer of de layout past op het A4 vel
+            if not self.validate_layout(total_width, total_height, A4_WIDTH, A4_HEIGHT):
+                print("De gekozen layout past niet op het A4 vel")
+                return
+
+            # Ga door met exporteren als de validatie succesvol is
             image = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), "white")
             draw = ImageDraw.Draw(image)
 
@@ -765,11 +965,11 @@ class LabelDesigner(QMainWindow):
                     x = h_start + col * (SHAPE_WIDTH + MARGIN)
                     y = v_start + row * (SHAPE_HEIGHT + MARGIN)
                     
-                    # Gebruik de geselecteerde kleur voor de vorm
+                    # Gebruik de default kleur #723744 als er geen kleur is geselecteerd
                     if isinstance(color, QColor):
-                        shape_color = color.getRgb()[:3]  # Convert QColor to RGB tuple
+                        shape_color = color.getRgb()[:3]
                     else:
-                        shape_color = QColor(color).getRgb()[:3]  # Convert Qt.GlobalColor to RGB
+                        shape_color = QColor("#723744").getRgb()[:3]
                     
                     if shape_type == "Rechthoek":
                         # Gebruik de lijndikte van de editor
@@ -805,60 +1005,45 @@ class LabelDesigner(QMainWindow):
             title_width = title_bbox[2] - title_bbox[0]
             title_height = title_bbox[3] - title_bbox[1]
             
-            # Maak een nieuwe afbeelding voor de gedraaide tekst
-            txt = Image.new('RGBA', (title_width + 150, title_height + 150), (255, 255, 255, 0))
+            # Maak een nieuwe afbeelding voor de gedraaide tekst met meer ruimte
+            txt = Image.new('RGBA', (title_width + 300, title_height + 300), (255, 255, 255, 0))
             d = ImageDraw.Draw(txt)
             
-            # Voeg schaduw effect toe aan de titel
-            shadow_offset = 3
-            d.text((75 + shadow_offset, 75 + shadow_offset), title_text, 
-                  font=title_font, fill=(100, 100, 100, 128))  # Semi-transparante schaduw
-            d.text((75, 75), title_text, font=title_font, fill=(50, 50, 50))
+            # Voeg meerdere schaduwlagen toe voor meer diepte
+            shadow_offsets = [(6,6), (4,4), (2,2)]
+            for offset in shadow_offsets:
+                d.text((150 + offset[0], 150 + offset[1]), title_text, 
+                      font=title_font, fill=(0, 0, 0, 80))
+            # Hoofdtekst met donkerder zwart
+            d.text((150, 150), title_text, font=title_font, fill=(0, 0, 0))
             
-            # Roteer en voeg gloed effect toe
+            # Roteer en plaats hoger op de pagina
             txt = txt.rotate(15, expand=1, fillcolor=(255, 255, 255, 0))
             image.paste(txt, (A4_WIDTH//2 - txt.width//2, 30), txt)
 
-            # Aantal vormen (groot, rechtsonder)
+            # Verbeterd aantal met meerdere schaduwlagen
             total_shapes = rows * cols
             count_text = f"{total_shapes}"
-            # Define count_width and count_height before using them in the export_shape method
             count_bbox = draw.textbbox((0, 0), count_text, font=count_font)
             count_width = count_bbox[2] - count_bbox[0]
             count_height = count_bbox[3] - count_bbox[1]
-            # Maak een mooie achtergrond voor het aantal
-            count_bg_margin = 30
-            bg_rect = [
-                A4_WIDTH - count_width - count_bg_margin*2 - 40,
-                A4_HEIGHT - count_height - count_bg_margin*2 - 40,
-                A4_WIDTH - 40 + count_bg_margin,
-                A4_HEIGHT - 40 + count_bg_margin
-            ]
-            # Teken een subtiele gradient achtergrond
-            for i in range(count_bg_margin):
-                alpha = 255 - (i * 255 // count_bg_margin)
-                draw.rectangle([
-                    bg_rect[0] - i,
-                    bg_rect[1] - i,
-                    bg_rect[2] + i,
-                    bg_rect[3] + i
-                ], fill=(245, 245, 245, alpha))
 
-            # Teken aantal met verbeterd schaduw effect
-            shadow_offset = 3
-            for offset in range(1, shadow_offset + 1):
-                alpha = 100 - (offset * 30)
+            # Teken meerdere schaduwlagen voor het aantal
+            shadow_positions = [(5,5), (3,3), (2,2)]
+            for offset in shadow_positions:
                 draw.text(
-                    (A4_WIDTH - count_width - 40 + offset, A4_HEIGHT - 120 + offset),
+                    (A4_WIDTH - count_width - 40 + offset[0], A4_HEIGHT - 160 + offset[1]),
                     count_text,
                     font=count_font,
-                    fill=(100, 100, 100, alpha)
+                    fill=(0, 0, 0, 60)
                 )
+            
+            # Hoofdtekst van het aantal
             draw.text(
-                (A4_WIDTH - count_width - 40, A4_HEIGHT - 120),
+                (A4_WIDTH - count_width - 40, A4_HEIGHT - 160),
                 count_text,
                 font=count_font,
-                fill=(50, 50, 50)
+                fill=(0, 0, 0)
             )
 
             # Voeg een subtiel watermerk toe
@@ -878,6 +1063,25 @@ class LabelDesigner(QMainWindow):
 
         except Exception as e:
             print(f"Fout bij exporteren: {str(e)}")
+
+    def update_layout_preview(self):
+        """Update de status balk met layout informatie"""
+        try:
+            if self.manual_layout_checkbox.isChecked():
+                cols = int(self.columns_input.text() or "0")
+                rows = int(self.rows_input.text() or "0")
+                total = cols * rows
+                self.statusBar.showMessage(
+                    f"Handmatige layout: {cols} kolommen × {rows} rijen = {total} vormen"
+                )
+            else:
+                self.statusBar.showMessage(
+                    "Automatische layout: optimale verdeling wordt berekend tijdens genereren"
+                )
+        except ValueError:
+            self.statusBar.showMessage(
+                "Ongeldige waarden voor rijen of kolommen"
+            )
 
 def main():
     app = QApplication(sys.argv)
